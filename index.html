@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Online Quiz — Open Trivia DB</title>
+  <link rel="stylesheet" href="styles.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+  <div class="container">
+    <header class="topbar">
+      <div class="brand">
+        <h1>Online Quiz</h1>
+        <p class="subtitle">Live questions from Open Trivia DB</p>
+      </div>
+
+      <div class="timer-wrap">
+        <div id="timebar" class="timebar">
+          <span id="timer">00:00</span>
+        </div>
+        <button id="restartBtn" class="ghost-btn">Restart</button>
+      </div>
+    </header>
+
+    <div class="progress">
+      <div id="progressFill" class="progress-fill"></div>
+    </div>
+
+    <main id="main" class="main">
+      <div id="loading" class="loading">Loading questions…</div>
+    </main>
+
+    <footer class="footer">
+      <div class="meta">
+        <span id="qcount">0 / 0</span>
+      </div>
+      <div class="credits">Built with HTML • CSS • JavaScript — Open Trivia DB</div>
+    </footer>
+  </div>
+
+<script>
+/* === CONFIG === */
+const API_URL = "https://opentdb.com/api.php?amount=7&type=multiple";
+const TOTAL_TIME_SEC = 5 * 60;
+
+/* === STATE === */
+let questions = [];
+let current = 0;
+let answers = {};
+let timeLeft = TOTAL_TIME_SEC;
+let timerInterval = null;
+
+/* === UTIL === */
+function decodeHtml(html) {
+  const txt = document.createElement("textarea");
+  txt.innerHTML = html;
+  return txt.value;
+}
+
+/* === FETCH QUESTIONS === */
+async function loadQuestions() {
+  const main = document.getElementById("main");
+  try {
+    const res = await fetch(API_URL);
+    const json = await res.json();
+    if (!json.results || !json.results.length) throw new Error("No questions returned.");
+    questions = json.results.map((r, i) => {
+      const opts = [...r.incorrect_answers.map(decodeHtml)];
+      const correct = decodeHtml(r.correct_answer);
+      const pos = Math.floor(Math.random() * (opts.length + 1));
+      opts.splice(pos, 0, correct);
+      return {
+        id: i + 1,
+        question: decodeHtml(r.question),
+        options: opts,
+        correctIndex: pos
+      };
+    });
+    current = 0;
+    answers = {};
+    timeLeft = TOTAL_TIME_SEC;
+    renderQuestion();
+    startTimer();
+    updateQCount();
+  } catch (err) {
+    main.innerHTML = `<div class="err">⚠️ Failed to load quiz. Please try again.</div>`;
+    console.error(err);
+  }
+}
+
+/* === TIMER === */
+function startTimer() {
+  clearInterval(timerInterval);
+  renderTimer();
+  timerInterval = setInterval(() => {
+    timeLeft--;
+    if (timeLeft <= 0) {
+      clearInterval(timerInterval);
+      submitQuiz();
+    }
+    renderTimer();
+  }, 1000);
+}
+function renderTimer() {
+  const timerEl = document.getElementById("timer");
+  const mm = String(Math.floor(timeLeft / 60)).padStart(2, "0");
+  const ss = String(timeLeft % 60).padStart(2, "0");
+  timerEl.textContent = `${mm}:${ss}`;
+
+  const timebar = document.getElementById("timebar");
+  const pct = Math.max(0, (timeLeft / TOTAL_TIME_SEC) * 100);
+  timebar.style.setProperty("--pct", `${pct}%`);
+
+  timebar.classList.remove("warning", "danger");
+  if (timeLeft <= 15) timebar.classList.add("danger");
+  else if (timeLeft <= 60) timebar.classList.add("warning");
+}
+
+/* === RENDER QUESTION === */
+function renderQuestion() {
+  const main = document.getElementById("main");
+  const progressFill = document.getElementById("progressFill");
+  if (!questions.length) {
+    main.innerHTML = "<div class='err'>No questions available.</div>";
+    return;
+  }
+  const q = questions[current];
+
+  const pct = ((current) / questions.length) * 100;
+  progressFill.style.width = pct + "%";
+
+  main.innerHTML = "";
+
+  const card = document.createElement("div");
+  card.className = "card fade-in";
+
+  const qTitle = document.createElement("h2");
+  qTitle.className = "qtitle";
+  qTitle.textContent = `Q${current + 1}. ${q.question}`;
+  card.appendChild(qTitle);
+
+  const list = document.createElement("ul");
+  list.className = "options";
+
+  q.options.forEach((optText, idx) => {
+    const li = document.createElement("li");
+    li.className = "option";
+    li.tabIndex = 0;
+    li.dataset.idx = idx;
+    li.dataset.qid = q.id;
+    li.innerHTML = `<span class="opt-label">${String.fromCharCode(65 + idx)}</span><span class="opt-text">${optText}</span>`;
+
+    if (answers[q.id] !== undefined && answers[q.id] === idx) {
+      li.classList.add("selected");
+    }
+
+    li.addEventListener("click", () => selectOption(q.id, idx));
+    list.appendChild(li);
+  });
+
+  card.appendChild(list);
+
+  const actions = document.createElement("div");
+  actions.className = "actions";
+
+  const prevBtn = document.createElement("button");
+  prevBtn.className = "btn";
+  prevBtn.textContent = "Previous";
+  prevBtn.disabled = current === 0;
+  prevBtn.addEventListener("click", () => {
+    if (current > 0) { current--; renderQuestion(); updateQCount(); }
+  });
+
+  const nextBtn = document.createElement("button");
+  nextBtn.className = "btn primary";
+  nextBtn.textContent = current < questions.length - 1 ? "Next" : "Submit";
+  nextBtn.addEventListener("click", () => {
+    if (current < questions.length - 1) {
+      current++; renderQuestion(); updateQCount();
+    } else {
+      submitQuiz();
+    }
+  });
+
+  actions.appendChild(prevBtn);
+  actions.appendChild(nextBtn);
+  card.appendChild(actions);
+
+  main.appendChild(card);
+  updateQCount();
+}
+
+/* === SELECT OPTION === */
+function selectOption(qid, idx) {
+  answers[qid] = idx;
+  const options = document.querySelectorAll(".option");
+  options.forEach(li => {
+    if (parseInt(li.dataset.qid) === qid) {
+      li.classList.toggle("selected", parseInt(li.dataset.idx) === idx);
+    }
+  });
+}
+
+/* === SUBMIT QUIZ === */
+/* === SUBMIT QUIZ === */
+function submitQuiz() {
+  clearInterval(timerInterval);
+
+  let score = 0;
+  questions.forEach(q => {
+    if (answers[q.id] === q.correctIndex) score++;
+  });
+  const percentage = Math.round((score / questions.length) * 100);
+
+  const main = document.getElementById("main");
+  main.innerHTML = "";
+  const resultCard = document.createElement("div");
+  resultCard.className = "card result-card fade-in";
+
+  // Title
+  const title = document.createElement("h2");
+  title.textContent = "🎉 Quiz Completed!";
+  resultCard.appendChild(title);
+
+  // Score Summary
+  const summary = document.createElement("div");
+  summary.className = "score-summary";
+
+  const scoreText = document.createElement("p");
+  scoreText.innerHTML = `<strong>Your Score:</strong> ${score} / ${questions.length} (${percentage}%)`;
+  summary.appendChild(scoreText);
+
+  const badge = document.createElement("div");
+  badge.className = "score-badge " + 
+    (percentage >= 80 ? "excellent" : percentage >= 50 ? "average" : "poor");
+  badge.textContent =
+    percentage >= 80 ? "🌟 Excellent!" :
+    percentage >= 50 ? "👍 Good Effort" : "⚠ Needs Practice";
+  summary.appendChild(badge);
+
+  resultCard.appendChild(summary);
+
+  // Chart Container
+  const chartWrap = document.createElement("div");
+  chartWrap.className = "chart-wrap";
+  const canvas = document.createElement("canvas");
+  canvas.id = "resultChart";
+  chartWrap.appendChild(canvas);
+  resultCard.appendChild(chartWrap);
+
+  // Retake Button
+  const again = document.createElement("div");
+  again.className = "result-actions";
+  const retryBtn = document.createElement("button");
+  retryBtn.className = "btn primary";
+  retryBtn.textContent = "🔄 Retake Quiz";
+  retryBtn.addEventListener("click", () => loadQuestions());
+  again.appendChild(retryBtn);
+
+  resultCard.appendChild(again);
+  main.appendChild(resultCard);
+
+  // Render chart
+  const wrong = questions.length - score;
+  new Chart(canvas, {
+    type: 'pie',
+    data: {
+      labels: ['Correct', 'Wrong'],
+      datasets: [{
+        data: [score, wrong],
+        backgroundColor: ['#10b981', '#ef4444']
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { position: 'bottom', labels: { color: "#fff" } } }
+    }
+  });
+
+  document.getElementById("progressFill").style.width = "100%";
+  updateQCount(true);
+}
+/* === TAB SWITCH HANDLER === */
+let tabSwitchCount = 0;
+const MAX_SWITCHES = 2;
+
+// Create warning toast dynamically
+function createToast() {
+  const toast = document.createElement("div");
+  toast.id = "tabToast";
+  toast.className = "tab-toast hidden";
+  document.body.appendChild(toast);
+  return toast;
+}
+const tabToast = createToast();
+
+function showToast(message, type = "warn") {
+  tabToast.textContent = message;
+  tabToast.className = `tab-toast ${type} visible`;
+
+  setTimeout(() => {
+    tabToast.classList.remove("visible");
+    tabToast.classList.add("hidden");
+  }, 4000);
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) {
+    tabSwitchCount++;
+
+    if (tabSwitchCount <= MAX_SWITCHES) {
+      showToast(
+        `⚠ Warning: Don't switching Tabs. Quiz will auto-submit.`,
+        "warn"
+      );
+    }
+
+    if (tabSwitchCount > MAX_SWITCHES) {
+      showToast("❌  Quiz is submitted. Due to Multiple Switching of Tabs", "error");
+      setTimeout(() => submitQuiz(), 2000);
+    }
+  }
+});
+
+
+
+/* === Q COUNT === */
+function updateQCount(isResult=false) {
+  const qcount = document.getElementById("qcount");
+  if (isResult) qcount.textContent = `${questions.length} / ${questions.length}`;
+  else qcount.textContent = `${current + 1} / ${questions.length}`;
+}
+
+/* === RESTART === */
+document.getElementById("restartBtn").addEventListener("click", () => {
+  if (confirm("Restart quiz and load new questions?")) {
+    loadQuestions();
+  }
+});
+
+/* === INIT === */
+loadQuestions();
+</script>
+</body>
+</html>
